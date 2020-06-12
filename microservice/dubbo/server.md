@@ -356,7 +356,7 @@ protected List<URL> loadRegistries(boolean provider) {
                         }
                         Invoker<?> invoker = proxyFactory.getInvoker(ref, (Class) interfaceClass, registryURL.addParameterAndEncoded(Constants.EXPORT_KEY, url.toFullString()));
                         DelegateProviderMetaDataInvoker wrapperInvoker = new DelegateProviderMetaDataInvoker(invoker, this);
-                        // 导出服务，并生成 Exporter
+                        // 导出服务，并生成 Exporter，此处获取的protocol为registry类型，RegistryProtocol为DubboProtocol的包装类
                         Exporter<?> exporter = protocol.export(wrapperInvoker);
                         exporters.add(exporter);
                     }
@@ -371,5 +371,39 @@ protected List<URL> loadRegistries(boolean provider) {
             }
         }
         this.urls.add(url);
+    }
+```
+此处分析```RegistryProtocol.export(Invoker)```的源码如下:  
+```
+    @Override
+    public <T> Exporter<T> export(final Invoker<T> originInvoker) throws RpcException {
+        //导出服务，此处会调用DubboProtocol的export方法
+        final ExporterChangeableWrapper<T> exporter = doLocalExport(originInvoker);
+
+        URL registryUrl = getRegistryUrl(originInvoker);
+
+        //registry provider
+        final Registry registry = getRegistry(originInvoker);
+        final URL registedProviderUrl = getRegistedProviderUrl(originInvoker);
+
+        //to judge to delay publish whether or not
+        boolean register = registedProviderUrl.getParameter("register", true);
+
+        ProviderConsumerRegTable.registerProvider(originInvoker, registryUrl, registedProviderUrl);
+
+        if (register) {
+            //像注册中心注册服务
+            register(registryUrl, registedProviderUrl);
+            ProviderConsumerRegTable.getProviderWrapper(originInvoker).setReg(true);
+        }
+
+        // Subscribe the override data
+        // FIXME When the provider subscribes, it will affect the scene : a certain JVM exposes the service and call the same service. Because the subscribed is cached key with the name of the service, it causes the subscription information to cover.
+        final URL overrideSubscribeUrl = getSubscribedOverrideUrl(registedProviderUrl);
+        final OverrideListener overrideSubscribeListener = new OverrideListener(overrideSubscribeUrl, originInvoker);
+        overrideListeners.put(overrideSubscribeUrl, overrideSubscribeListener);
+        registry.subscribe(overrideSubscribeUrl, overrideSubscribeListener);
+        //Ensure that a new exporter instance is returned every time export
+        return new DestroyableExporter<T>(exporter, originInvoker, overrideSubscribeUrl, registedProviderUrl);
     }
 ```
