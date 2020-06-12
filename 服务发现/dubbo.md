@@ -191,7 +191,7 @@ public class Transporter$Adaptive implements Transporter{
 ```
     private T createAdaptiveExtension() {
         try {
-            //getAdaptiveExtensionClass生成代理对象
+            //getAdaptiveExtensionClass生成代理对象，注入参数
             return injectExtension((T) getAdaptiveExtensionClass().newInstance());
         } catch (Exception e) {
             throw new IllegalStateException("Can not create adaptive extension " + type + ", cause: " + e.getMessage(), e);
