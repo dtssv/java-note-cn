@@ -87,6 +87,36 @@ public class SPIMain {
 }
 ```
 #### Adaptive
+即自适应扩展，自适应扩展通过代理模式实现。目的是只有当扩展类使用时才加载目标类。自适应扩展类需要被注解@Adaptive修饰，被@Adaptive修饰的方法会被生成代理方法，如果方法未被修饰，则默认抛出异常。下面以dubbo.Transporter举例。   
+Transporter源码如下：
+```
+@SPI("netty")
+public interface Transporter {
+    @Adaptive({Constants.SERVER_KEY, Constants.TRANSPORTER_KEY})
+    Server bind(URL url, ChannelHandler handler) throws RemotingException;
+
+    @Adaptive({Constants.CLIENT_KEY, Constants.TRANSPORTER_KEY})
+    Client connect(URL url, ChannelHandler handler) throws RemotingException;
+}
+```
+Transporter生成代理类代码如下：
+```
+package com.alibaba.dubbo.remoting;
+import com.alibaba.dubbo.common.extension.ExtensionLoader;
+public class Transporter$Adaptive implements Transporter{
+    public com.alibaba.dubbo.remoting.Server bind(com.alibaba.dubbo.common.URL arg0, com.alibaba.dubbo.remoting.ChannelHandler arg1) throws com.alibaba.dubbo.remoting.RemotingException{
+        if (arg0 == null) 
+            throw new IllegalArgumentException("url == null");
+        com.alibaba.dubbo.common.URL url = arg0;
+        String extName = url.getParameter("transporter", "netty");
+        if(extName == null) 
+            throw new IllegalStateException("Fail to get extension(Transporter) name from url(" + url.toString() + ") use keys(server,transport)");
+        Transporter extension = (Transporter)ExtensionLoader.getExtensionLoader(Transporter.class).getExtension(extName);
+        return extension.bind(arg0,arg1);
+    }
+    //忽略
+}
+```
 #### Server
 #### Client
 #### LoadBlance
