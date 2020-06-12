@@ -65,7 +65,7 @@ public class Dog implements IShout {
 ```
 3.定义SPI接口文件，dubbo会从以下三个路径加载SPI接口文件，文件路径可为  
 ```src->main->resources->META-INF->services->com.demo.IShout```  
-```src->main->resources->META-INF->dubbo->com.demo.IShout``` 
+```src->main->resources->META-INF->dubbo->com.demo.IShout```  
 ```src->main->resources->META-INF->dubbo->internal->com.demo.IShout``` 
 
 文件内容为
@@ -117,6 +117,42 @@ public class Transporter$Adaptive implements Transporter{
     //忽略
 }
 ```
+其中代码生成逻辑大同小异，只是根据方法入参是否有```com.alibaba.dubbo.common.URL```类型或者是否有```com.alibaba.dubbo.rpc.Invocation```或者入参的属性是否有```com.alibaba.dubbo.common.URL```，或者接口是否为```com.alibaba.dubbo.rpc.Protocol```有略微差异。  
+当入参有```com.alibaba.dubbo.common.URL```时，生成代码如下:  
+```
+        if (arg0 == null) 
+            throw new IllegalArgumentException("url == null");
+        com.alibaba.dubbo.common.URL url = arg0;
+        String extName = url.getParameter("transporter", defaultExtName);
+```
+当入参不包含但是入参的属性包含```com.alibaba.dubbo.common.URL```时，生成代码如下：
+```
+        if (arg0 == null) 
+            throw new IllegalArgumentException("com.alibaba.dubbo.rpc.Invoker argument == null");
+        if (arg0.getUrl() == null) 
+            throw new IllegalArgumentException("com.alibaba.dubbo.rpc.Invoker argument getUrl() == null");
+        com.alibaba.dubbo.common.URL url = arg0.getUrl();
+        String extName = url.getParameter("transporter", defaultExtName);
+```
+当入参包含```com.alibaba.dubbo.rpc.Invocation```时，生成代码如下：
+```
+        if (arg0 == null) 
+            throw new IllegalArgumentException("url == null");
+        com.alibaba.dubbo.common.URL url = arg0;
+        if (arg1 == null) 
+            throw new IllegalArgumentException("invocation == null");
+        String methodName = arg1.getMethodName();
+        String extName = url.getMethodParameter(methodName, "transporter", defaultExtName);
+
+```
+当接口为```com.alibaba.dubbo.rpc.Protocol```时，生成代码如下：
+```
+        if (arg0 == null) 
+            throw new IllegalArgumentException("url == null");
+        com.alibaba.dubbo.common.URL url = arg0;
+        String extName = ( url.getProtocol() == null ? defaultExtName : url.getProtocol() );
+```
+其中```defaultExtName```为```SPI```注解默认值，如果无默认值，则以上代码微调为类似```String extName =  url.getProtocol()```，不判断获取结果为空取默认值。  
 #### Server
 #### Client
 #### LoadBlance
