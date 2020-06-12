@@ -11,4 +11,6 @@
 [数据结构](structure/index.md)  
 [多线程](thread/index.md)  
 [事务](tx/index.md)  
+[orm](orm/index.md)  
+[算法](algorithm/index.md)  
 [k8s](k8s/index.md)  
