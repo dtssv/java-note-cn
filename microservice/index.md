@@ -1,1 +1,1 @@
-[DUBBO](dubbo.md)
+[DUBBO](dubbo/dubbo.md)
