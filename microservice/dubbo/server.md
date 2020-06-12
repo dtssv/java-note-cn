@@ -69,7 +69,7 @@ service.export();
         }
     }
 ```
-```doExport()```源码分析  
+```doExport()```源码分析:  
 ```
     protected synchronized void doExport() {
         //各种验证判断，忽略
@@ -138,7 +138,7 @@ service.export();
         }
     }
 ```
-```loadRegistries()```源码分析如下
+```loadRegistries()```源码分析:  
 ```
 protected List<URL> loadRegistries(boolean provider) {
     // 检测是否存在注册中心配置类，不存在则抛出异常
@@ -222,30 +222,35 @@ protected List<URL> loadRegistries(boolean provider) {
         appendParameters(map, provider, Constants.DEFAULT_KEY);
         appendParameters(map, protocolConfig);
         appendParameters(map, this);
+        //为<dubbo:service><dubbo:method>信息
         if (methods != null && !methods.isEmpty()) {
             for (MethodConfig method : methods) {
+                //通过反射将method对象的字段信息加到map里，前缀为methodName
                 appendParameters(map, method, method.getName());
                 String retryKey = method.getName() + ".retry";
                 if (map.containsKey(retryKey)) {
                     String retryValue = map.remove(retryKey);
+                    //如果retry为false的话，设置retries=0
                     if ("false".equals(retryValue)) {
                         map.put(method.getName() + ".retries", "0");
                     }
                 }
                 List<ArgumentConfig> arguments = method.getArguments();
                 if (arguments != null && !arguments.isEmpty()) {
+                    //方法参数，操作和method大致相似
                     for (ArgumentConfig argument : arguments) {
                         // convert argument type
                         if (argument.getType() != null && argument.getType().length() > 0) {
+                            //获取service所有方法
                             Method[] methods = interfaceClass.getMethods();
                             // visit all methods
                             if (methods != null && methods.length > 0) {
                                 for (int i = 0; i < methods.length; i++) {
                                     String methodName = methods[i].getName();
-                                    // target the method, and get its signature
+                                    // 比对是否同一个方法
                                     if (methodName.equals(method.getName())) {
                                         Class<?>[] argtypes = methods[i].getParameterTypes();
-                                        // one callback in the method
+                                        // 判断参数类型是否一致，一致则将参数放到map里，前缀为methodName.n，不一致抛异常
                                         if (argument.getIndex() != -1) {
                                             if (argtypes[argument.getIndex()].getName().equals(argument.getType())) {
                                                 appendParameters(map, argument, method.getName() + "." + argument.getIndex());
@@ -277,7 +282,7 @@ protected List<URL> loadRegistries(boolean provider) {
                 }
             } // end of methods for
         }
-
+        // 检测 generic 是否为 "true"，并根据检测结果向 map 中添加不同的信息
         if (ProtocolUtils.isGeneric(generic)) {
             map.put(Constants.GENERIC_KEY, generic);
             map.put(Constants.METHODS_KEY, Constants.ANY_VALUE);
@@ -286,15 +291,17 @@ protected List<URL> loadRegistries(boolean provider) {
             if (revision != null && revision.length() > 0) {
                 map.put("revision", revision);
             }
-
+            //判断是否为DC的子类，如果父类是Object，则返回默认Wrapper，如果不是，则通过反射生成包装类
             String[] methods = Wrapper.getWrapper(interfaceClass).getMethodNames();
             if (methods.length == 0) {
                 logger.warn("NO method found in service interface " + interfaceClass.getName());
                 map.put(Constants.METHODS_KEY, Constants.ANY_VALUE);
             } else {
+                // 添加方法名到 map 中，如果包含多个方法名，则用逗号隔开，比如 method = init,destroy
                 map.put(Constants.METHODS_KEY, StringUtils.join(new HashSet<String>(Arrays.asList(methods)), ","));
             }
         }
+        //如果token为空，则生成随机token放到map里，否则用预先设置的token
         if (!ConfigUtils.isEmpty(token)) {
             if (ConfigUtils.isDefault(token)) {
                 map.put(Constants.TOKEN_KEY, UUID.randomUUID().toString());
@@ -302,20 +309,21 @@ protected List<URL> loadRegistries(boolean provider) {
                 map.put(Constants.TOKEN_KEY, token);
             }
         }
+        //判断协议是否为injvm
         if (Constants.LOCAL_PROTOCOL.equals(protocolConfig.getName())) {
             protocolConfig.setRegister(false);
             map.put("notify", "false");
         }
-        // export service
+        // 获取上下文
         String contextPath = protocolConfig.getContextpath();
         if ((contextPath == null || contextPath.length() == 0) && provider != null) {
             contextPath = provider.getContextpath();
         }
-
+        //获取host，port
         String host = this.findConfigedHosts(protocolConfig, registryURLs, map);
         Integer port = this.findConfigedPorts(protocolConfig, name, map);
         URL url = new URL(name, host, port, (contextPath == null || contextPath.length() == 0 ? "" : contextPath + "/") + path, map);
-
+        //判断是否有指定协议，有则加载 ConfiguratorFactory，并生成 Configurator 实例，然后通过实例配置 url
         if (ExtensionLoader.getExtensionLoader(ConfiguratorFactory.class)
                 .hasExtension(url.getProtocol())) {
             url = ExtensionLoader.getExtensionLoader(ConfiguratorFactory.class)
@@ -323,14 +331,14 @@ protected List<URL> loadRegistries(boolean provider) {
         }
 
         String scope = url.getParameter(Constants.SCOPE_KEY);
-        // don't export when none is configured
+        // 如果scope!=none则导出服务
         if (!Constants.SCOPE_NONE.toString().equalsIgnoreCase(scope)) {
 
-            // export to local if the config is not remote (export to remote only when config is remote)
+            // 如果scope=local则导出本地服务
             if (!Constants.SCOPE_REMOTE.toString().equalsIgnoreCase(scope)) {
                 exportLocal(url);
             }
-            // export to remote if the config is not local (export to local only when config is local)
+            // 如果scope=remote则导出服务
             if (!Constants.SCOPE_LOCAL.toString().equalsIgnoreCase(scope)) {
                 if (logger.isInfoEnabled()) {
                     logger.info("Export dubbo service " + interfaceClass.getName() + " to url " + url);
@@ -338,6 +346,7 @@ protected List<URL> loadRegistries(boolean provider) {
                 if (registryURLs != null && !registryURLs.isEmpty()) {
                     for (URL registryURL : registryURLs) {
                         url = url.addParameterIfAbsent(Constants.DYNAMIC_KEY, registryURL.getParameter(Constants.DYNAMIC_KEY));
+                        //获取监视器
                         URL monitorUrl = loadMonitor(registryURL);
                         if (monitorUrl != null) {
                             url = url.addParameterAndEncoded(Constants.MONITOR_KEY, monitorUrl.toFullString());
@@ -347,11 +356,12 @@ protected List<URL> loadRegistries(boolean provider) {
                         }
                         Invoker<?> invoker = proxyFactory.getInvoker(ref, (Class) interfaceClass, registryURL.addParameterAndEncoded(Constants.EXPORT_KEY, url.toFullString()));
                         DelegateProviderMetaDataInvoker wrapperInvoker = new DelegateProviderMetaDataInvoker(invoker, this);
-
+                        // 导出服务，并生成 Exporter
                         Exporter<?> exporter = protocol.export(wrapperInvoker);
                         exporters.add(exporter);
                     }
                 } else {
+                    //如果注册中心为空，仅导出服务
                     Invoker<?> invoker = proxyFactory.getInvoker(ref, (Class) interfaceClass, url);
                     DelegateProviderMetaDataInvoker wrapperInvoker = new DelegateProviderMetaDataInvoker(invoker, this);
 
