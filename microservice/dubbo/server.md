@@ -525,5 +525,43 @@ protected List<URL> loadRegistries(boolean provider) {
     public Server bind(URL url, ChannelHandler listener) throws RemotingException {
         return new NettyServer(url, listener);
     }
-    //NettyServer
+    //NettyServer,此处一起分析，
+    public NettyServer(URL url, ChannelHandler handler) throws RemotingException {
+        //父类会调用下边doOpen()方法
+        super(url, ChannelHandlers.wrap(handler, ExecutorUtil.setThreadName(url, SERVER_THREAD_POOL_NAME)));
+    }
+
+    @Override
+    protected void doOpen() throws Throwable {
+        NettyHelper.setNettyLoggerFactory();
+        ExecutorService boss = Executors.newCachedThreadPool(new NamedThreadFactory("NettyServerBoss", true));
+        ExecutorService worker = Executors.newCachedThreadPool(new NamedThreadFactory("NettyServerWorker", true));
+        ChannelFactory channelFactory = new NioServerSocketChannelFactory(boss, worker, getUrl().getPositiveParameter(Constants.IO_THREADS_KEY, Constants.DEFAULT_IO_THREADS));
+        //启动netty服务器
+        bootstrap = new ServerBootstrap(channelFactory);
+
+        final NettyHandler nettyHandler = new NettyHandler(getUrl(), this);
+        channels = nettyHandler.getChannels();
+        // https://issues.jboss.org/browse/NETTY-365
+        // https://issues.jboss.org/browse/NETTY-379
+        // final Timer timer = new HashedWheelTimer(new NamedThreadFactory("NettyIdleTimer", true));
+        bootstrap.setPipelineFactory(new ChannelPipelineFactory() {
+            @Override
+            public ChannelPipeline getPipeline() {
+                NettyCodecAdapter adapter = new NettyCodecAdapter(getCodec(), getUrl(), NettyServer.this);
+                ChannelPipeline pipeline = Channels.pipeline();
+                /*int idleTimeout = getIdleTimeout();
+                if (idleTimeout > 10000) {
+                    pipeline.addLast("timer", new IdleStateHandler(timer, idleTimeout / 1000, 0, 0));
+                }*/
+                pipeline.addLast("decoder", adapter.getDecoder());
+                pipeline.addLast("encoder", adapter.getEncoder());
+                pipeline.addLast("handler", nettyHandler);
+                return pipeline;
+            }
+        });
+        // bind
+        channel = bootstrap.bind(getBindAddress());
+    }
 ```
+至此，服务导出已经分析完毕，接下来分析服务注册相关逻辑  
