@@ -71,8 +71,7 @@ public class Transporter$Adaptive implements Transporter{
         //获取Transporter的ExtensionLoader，重要的方法是getAdaptiveExtension()
         return ExtensionLoader.getExtensionLoader(Transporter.class).getAdaptiveExtension();
     }
-```  
-```
+    //ExtensionLoader
     public T getAdaptiveExtension() {
         //从缓存获取代理对象
         Object instance = cachedAdaptiveInstance.get();
@@ -99,8 +98,7 @@ public class Transporter$Adaptive implements Transporter{
         }
         return (T) instance;
     }
-```
-```
+
     private T createAdaptiveExtension() {
         try {
             //getAdaptiveExtensionClass生成代理对象，注入参数
@@ -125,8 +123,7 @@ public class Transporter$Adaptive implements Transporter{
         //编译生成的代码，使用javassist扩展类编译
         return compiler.compile(code, classLoader);
     }
-```
-```
+    
     private String createAdaptiveExtensionClassCode() {
         StringBuilder codeBuilder = new StringBuilder();
         //获取接口所有方法
@@ -332,3 +329,234 @@ public class Transporter$Adaptive implements Transporter{
         return codeBuilder.toString();
     }
 ```
+上边分析了自适应扩展相关逻辑，类生成完成会向对象注入属性，注入实现方法为```injectExtension```     
+```
+    private T injectExtension(T instance) {
+        try {
+            if (objectFactory != null) {
+                for (Method method : instance.getClass().getMethods()) {
+                    if (method.getName().startsWith("set")
+                            && method.getParameterTypes().length == 1
+                            && Modifier.isPublic(method.getModifiers())) {
+                        Class<?> pt = method.getParameterTypes()[0];
+                        try {
+                            String property = method.getName().length() > 3 ? method.getName().substring(3, 4).toLowerCase() + method.getName().substring(4) : "";
+                            Object object = objectFactory.getExtension(pt, property);
+                            if (object != null) {
+                                method.invoke(instance, object);
+                            }
+                        } catch (Exception e) {
+                            logger.error("fail to inject via method " + method.getName()
+                                    + " of interface " + type.getName() + ": " + e.getMessage(), e);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            logger.error(e.getMessage(), e);
+        }
+        return instance;
+    }
+
+```
+通过源码可知，注入实现方式是通过反射，获取类的所有set方法，如```public void setProtocol(Protocol protocol)```，通过```objectFactory.getExtension```获取注入对象，下面主要分析```objectFactory```初始化，和如何生成注入对象两部分。  
+```objectFactory```初始化过程分析：  
+```
+    public static <T> ExtensionLoader<T> getExtensionLoader(Class<T> type) {
+        //...各种判断忽略
+        //从缓存获取，如果无法获取到就构造ExtensionLoader
+        ExtensionLoader<T> loader = (ExtensionLoader<T>) EXTENSION_LOADERS.get(type);
+        if (loader == null) {
+            EXTENSION_LOADERS.putIfAbsent(type, new ExtensionLoader<T>(type));
+            loader = (ExtensionLoader<T>) EXTENSION_LOADERS.get(type);
+        }
+        return loader;
+    }
+    //ExtensionLoader构造方法，看到这里就感觉像是陷入了一个循环
+    private ExtensionLoader(Class<?> type) {
+        this.type = type;
+        objectFactory = (type == ExtensionFactory.class ? null : ExtensionLoader.getExtensionLoader(ExtensionFactory.class).getAdaptiveExtension());
+    }
+```
+上边的方法像是陷入了一个怪圈，那么```objectFactory```初始化到底是在哪初始化的呢，其实是上边自适应扩展生成逻辑中一个被忽略的方法，即```getAdaptiveExtensionClass()```，那么我们来再分析这个方法： 
+```
+    private Class<?> getAdaptiveExtensionClass() {
+        getExtensionClasses();
+        //...忽略
+    }
+    private Map<String, Class<?>> getExtensionClasses() {
+        Map<String, Class<?>> classes = cachedClasses.get();
+        if (classes == null) {
+            synchronized (cachedClasses) {
+                classes = cachedClasses.get();
+                if (classes == null) {
+                    classes = loadExtensionClasses();
+                    cachedClasses.set(classes);
+                }
+            }
+        }
+        return classes;
+    }
+    private Map<String, Class<?>> loadExtensionClasses() {
+        //获取SPI默认值并赋值给cachedDefaultName，代码忽略
+        Map<String, Class<?>> extensionClasses = new HashMap<String, Class<?>>();
+        //重点关注
+        loadDirectory(extensionClasses, DUBBO_INTERNAL_DIRECTORY);
+        loadDirectory(extensionClasses, DUBBO_DIRECTORY);
+        loadDirectory(extensionClasses, SERVICES_DIRECTORY);
+        return extensionClasses;
+    }
+    private void loadDirectory(Map<String, Class<?>> extensionClasses, String dir) {
+        //fileName = META-INF/dubbo/internal/com.alibaba.dubbo.common.extension.ExtensionFactory
+        String fileName = dir + type.getName();
+        try {
+            Enumeration<java.net.URL> urls;
+            ClassLoader classLoader = findClassLoader();
+            if (classLoader != null) {
+                urls = classLoader.getResources(fileName);
+            } else {
+                urls = ClassLoader.getSystemResources(fileName);
+            }
+            if (urls != null) {
+                while (urls.hasMoreElements()) {
+                    java.net.URL resourceURL = urls.nextElement();
+                    loadResource(extensionClasses, classLoader, resourceURL);
+                }
+            }
+        } catch (Throwable t) {
+            logger.error("Exception when load extension class(interface: " +
+                    type + ", description file: " + fileName + ").", t);
+        }
+    }
+    private void loadResource(Map<String, Class<?>> extensionClasses, ClassLoader classLoader, java.net.URL resourceURL) {
+        try {
+            BufferedReader reader = new BufferedReader(new InputStreamReader(resourceURL.openStream(), "utf-8"));
+            try {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    final int ci = line.indexOf('#');
+                    if (ci >= 0) line = line.substring(0, ci);
+                    line = line.trim();
+                    if (line.length() > 0) {
+                        try {
+                            String name = null;
+                            int i = line.indexOf('=');
+                            if (i > 0) {
+                                name = line.substring(0, i).trim();
+                                line = line.substring(i + 1).trim();
+                            }
+                            if (line.length() > 0) {
+                                //重点关注，上边都是读取SPI文件
+                                loadClass(extensionClasses, resourceURL, Class.forName(line, true, classLoader), name);
+                            }
+                        } catch (Throwable t) {
+                            IllegalStateException e = new IllegalStateException("Failed to load extension class(interface: " + type + ", class line: " + line + ") in " + resourceURL + ", cause: " + t.getMessage(), t);
+                            exceptions.put(line, e);
+                        }
+                    }
+                }
+            } finally {
+                reader.close();
+            }
+        } catch (Throwable t) {
+            logger.error("Exception when load extension class(interface: " +
+                    type + ", class file: " + resourceURL + ") in " + resourceURL, t);
+        }
+    }
+
+    private void loadClass(Map<String, Class<?>> extensionClasses, java.net.URL resourceURL, Class<?> clazz, String name) throws NoSuchMethodException {
+        if (!type.isAssignableFrom(clazz)) {
+            throw new IllegalStateException("Error when load extension class(interface: " +
+                    type + ", class line: " + clazz.getName() + "), class "
+                    + clazz.getName() + "is not subtype of interface.");
+        }
+        if (clazz.isAnnotationPresent(Adaptive.class)) {
+            //看到这里想必大家都已经清楚了，如果ExtensionFactory的实现类有被@Adaptive注解修饰，那么那个类就是objectFactory
+            if (cachedAdaptiveClass == null) {
+                cachedAdaptiveClass = clazz;
+            } else if (!cachedAdaptiveClass.equals(clazz)) {
+                throw new IllegalStateException("More than 1 adaptive class found: "
+                        + cachedAdaptiveClass.getClass().getName()
+                        + ", " + clazz.getClass().getName());
+            }
+        } else if (isWrapperClass(clazz)) {
+            Set<Class<?>> wrappers = cachedWrapperClasses;
+            if (wrappers == null) {
+                cachedWrapperClasses = new ConcurrentHashSet<Class<?>>();
+                wrappers = cachedWrapperClasses;
+            }
+            wrappers.add(clazz);
+        } else {
+            clazz.getConstructor();
+            if (name == null || name.length() == 0) {
+                name = findAnnotationName(clazz);
+                if (name == null || name.length() == 0) {
+                    if (clazz.getSimpleName().length() > type.getSimpleName().length()
+                            && clazz.getSimpleName().endsWith(type.getSimpleName())) {
+                        name = clazz.getSimpleName().substring(0, clazz.getSimpleName().length() - type.getSimpleName().length()).toLowerCase();
+                    } else {
+                        throw new IllegalStateException("No such extension name for the class " + clazz.getName() + " in the config " + resourceURL);
+                    }
+                }
+            }
+            String[] names = NAME_SEPARATOR.split(name);
+            if (names != null && names.length > 0) {
+                Activate activate = clazz.getAnnotation(Activate.class);
+                if (activate != null) {
+                    cachedActivates.put(names[0], activate);
+                }
+                for (String n : names) {
+                    if (!cachedNames.containsKey(clazz)) {
+                        cachedNames.put(clazz, n);
+                    }
+                    Class<?> c = extensionClasses.get(n);
+                    if (c == null) {
+                        extensionClasses.put(n, clazz);
+                    } else if (c != clazz) {
+                        throw new IllegalStateException("Duplicate extension " + type.getName() + " name " + n + " on " + c.getName() + " and " + clazz.getName());
+                    }
+                }
+            }
+        }
+    }
+
+```
+通过上边的逻辑我们知道如果```ExtensionFactory```的实现类有被```@Adaptive```注解修饰，那么那个类就是```objectFactory```，我们看对应的实现有三个，SPI文件内容为：  
+```
+//看名字就可以猜到默认是它，
+adaptive=com.alibaba.dubbo.common.extension.factory.AdaptiveExtensionFactory
+spi=com.alibaba.dubbo.common.extension.factory.SpiExtensionFactory
+spring=com.alibaba.dubbo.config.spring.extension.SpringExtensionFactory
+//不放心我们再看一下源码
+@Adaptive
+public class AdaptiveExtensionFactory implements ExtensionFactory {
+```
+上边的逻辑分析了```objectFactory```的初始化，那么又是怎么通过```objectFactory```像其他bean注入对象的呢，我们重点需要关注```Object object = objectFactory.getExtension(pt, property);```，下边我们来分析源码：  
+```
+    //AdaptiveExtensionFactory
+    @Override
+    public <T> T getExtension(Class<T> type, String name) {
+        //此处遍历spi和spring的ExtensionFactory实现并获取对应type实例的初始化，如果能够获取到则直接返回，现在我们期望的注入对象是Protocol，因为Protocol对象被SPI注解修饰，那么我们重点关注SpiExtensionFactory
+        for (ExtensionFactory factory : factories) {
+            T extension = factory.getExtension(type, name);
+            if (extension != null) {
+                return extension;
+            }
+        }
+        return null;
+    }
+    //SpiExtensionFactory
+    @Override
+    public <T> T getExtension(Class<T> type, String name) {
+        if (type.isInterface() && type.isAnnotationPresent(SPI.class)) {
+            ExtensionLoader<T> loader = ExtensionLoader.getExtensionLoader(type);
+            if (!loader.getSupportedExtensions().isEmpty()) {
+                //回归上边自适应扩展逻辑，生成代理对象
+                return loader.getAdaptiveExtension();
+            }
+        }
+        return null;
+    }
+    //SpringExtensionFactory逻辑分析忽略
+```
+自适应扩展和```SPI```其实是相辅相成的，不过因为自适应扩展逻辑较多所以分开分析。
