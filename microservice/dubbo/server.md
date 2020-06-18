@@ -1,4 +1,4 @@
-#### Server
+#### 服务导出
 参考dubbo官方文档，通过```API```方式导出服务示例为  
 ```
 import org.apache.dubbo.rpc.config.ApplicationConfig;
@@ -564,4 +564,47 @@ protected List<URL> loadRegistries(boolean provider) {
         channel = bootstrap.bind(getBindAddress());
     }
 ```
-至此，服务导出已经分析完毕，接下来分析服务注册相关逻辑  
+至此，服务导出已经分析完毕，接下来分析服务注册相关逻辑，服务注册相关逻辑由```RegistryProtocol.export()```实现，源码如下:  
+```
+    @Override
+    public <T> Exporter<T> export(final Invoker<T> originInvoker) throws RpcException {
+        //....忽略
+        if (register) {
+            register(registryUrl, registedProviderUrl);
+            ProviderConsumerRegTable.getProviderWrapper(originInvoker).setReg(true);
+        }
+        // ...忽略
+    }
+
+    public void register(URL registryUrl, URL registedProviderUrl) {
+        //获取注册中心，此处默认为zookeeper，不具体分析如何获取
+        Registry registry = registryFactory.getRegistry(registryUrl);
+        registry.register(registedProviderUrl);
+    }
+```
+```zookeeper```注册中心实现类为```public class ZookeeperRegistry extends FailbackRegistry ```，分析注册流程：  
+```
+    //FailbackRegistry
+    public void register(URL url) {
+        super.register(url);
+        failedRegistered.remove(url);
+        failedUnregistered.remove(url);
+        try {
+            // Sending a registration request to the server side
+            doRegister(url);
+        } catch (Exception e) {
+            //异常处理，忽略
+        }
+    }
+    //ZookeeperRegistry
+    @Override
+    protected void doRegister(URL url) {
+        try {
+            //此处可以看到zkClien
+            zkClient.create(toUrlPath(url), url.getParameter(Constants.DYNAMIC_KEY, true));
+        } catch (Throwable e) {
+            throw new RpcException("Failed to register " + url + " to zookeeper " + getUrl() + ", cause: " + e.getMessage(), e);
+        }
+    }
+```
+服务注册到此就告一段落，剩余注册到zookeeper就不再具体分析。  
