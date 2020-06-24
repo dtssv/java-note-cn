@@ -69,3 +69,48 @@ public class StaticDirectory<T> extends AbstractDirectory<T> {
 ```
 public class RegistryDirectory<T> extends AbstractDirectory<T> implements NotifyListener
 ```
+```RegistryDirectory```初始化完成并且赋值之后首先调用了```notify()```方法，即是```NotifyListener```接口的实现类如下：  
+```
+    @Override
+    public synchronized void notify(List<URL> urls) {
+        List<URL> invokerUrls = new ArrayList<URL>();
+        List<URL> routerUrls = new ArrayList<URL>();
+        List<URL> configuratorUrls = new ArrayList<URL>();
+        for (URL url : urls) {
+            String protocol = url.getProtocol();
+            String category = url.getParameter(Constants.CATEGORY_KEY, Constants.DEFAULT_CATEGORY);
+            if (Constants.ROUTERS_CATEGORY.equals(category)
+                    || Constants.ROUTE_PROTOCOL.equals(protocol)) {
+                routerUrls.add(url);
+            } else if (Constants.CONFIGURATORS_CATEGORY.equals(category)
+                    || Constants.OVERRIDE_PROTOCOL.equals(protocol)) {
+                configuratorUrls.add(url);
+            } else if (Constants.PROVIDERS_CATEGORY.equals(category)) {
+                invokerUrls.add(url);
+            } else {
+                logger.warn("Unsupported category " + category + " in notified url: " + url + " from registry " + getUrl().getAddress() + " to consumer " + NetUtils.getLocalHost());
+            }
+        }
+        // configurators
+        if (configuratorUrls != null && !configuratorUrls.isEmpty()) {
+            this.configurators = toConfigurators(configuratorUrls);
+        }
+        // routers
+        if (routerUrls != null && !routerUrls.isEmpty()) {
+            List<Router> routers = toRouters(routerUrls);
+            if (routers != null) { // null - do nothing
+                setRouters(routers);
+            }
+        }
+        List<Configurator> localConfigurators = this.configurators; // local reference
+        // merge override parameters
+        this.overrideDirectoryUrl = directoryUrl;
+        if (localConfigurators != null && !localConfigurators.isEmpty()) {
+            for (Configurator configurator : localConfigurators) {
+                this.overrideDirectoryUrl = configurator.configure(overrideDirectoryUrl);
+            }
+        }
+        // providers
+        refreshInvoker(invokerUrls);
+    }
+```
