@@ -78,6 +78,7 @@ public class RegistryDirectory<T> extends AbstractDirectory<T> implements Notify
         List<URL> configuratorUrls = new ArrayList<URL>();
         for (URL url : urls) {
             String protocol = url.getProtocol();
+            //大多情况下未配置，走默认为providers
             String category = url.getParameter(Constants.CATEGORY_KEY, Constants.DEFAULT_CATEGORY);
             if (Constants.ROUTERS_CATEGORY.equals(category)
                     || Constants.ROUTE_PROTOCOL.equals(protocol)) {
@@ -86,6 +87,7 @@ public class RegistryDirectory<T> extends AbstractDirectory<T> implements Notify
                     || Constants.OVERRIDE_PROTOCOL.equals(protocol)) {
                 configuratorUrls.add(url);
             } else if (Constants.PROVIDERS_CATEGORY.equals(category)) {
+                //也就是此处providers
                 invokerUrls.add(url);
             } else {
                 logger.warn("Unsupported category " + category + " in notified url: " + url + " from registry " + getUrl().getAddress() + " to consumer " + NetUtils.getLocalHost());
