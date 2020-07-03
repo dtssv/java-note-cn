@@ -115,4 +115,40 @@ public class RegistryDirectory<T> extends AbstractDirectory<T> implements Notify
         // providers
         refreshInvoker(invokerUrls);
     }
+
+    private void refreshInvoker(List<URL> invokerUrls) {
+        if (invokerUrls != null && invokerUrls.size() == 1 && invokerUrls.get(0) != null
+                && Constants.EMPTY_PROTOCOL.equals(invokerUrls.get(0).getProtocol())) {
+            this.forbidden = true; // Forbid to access
+            this.methodInvokerMap = null; // Set the method invoker map to null
+            destroyAllInvokers(); // Close all invokers
+        } else {
+            this.forbidden = false; // Allow to access
+            Map<String, Invoker<T>> oldUrlInvokerMap = this.urlInvokerMap; // local reference
+            if (invokerUrls.isEmpty() && this.cachedInvokerUrls != null) {
+                invokerUrls.addAll(this.cachedInvokerUrls);
+            } else {
+                this.cachedInvokerUrls = new HashSet<URL>();
+                this.cachedInvokerUrls.addAll(invokerUrls);//Cached invoker urls, convenient for comparison
+            }
+            if (invokerUrls.isEmpty()) {
+                return;
+            }
+            Map<String, Invoker<T>> newUrlInvokerMap = toInvokers(invokerUrls);// 构建invoker
+            Map<String, List<Invoker<T>>> newMethodInvokerMap = toMethodInvokers(newUrlInvokerMap); // Change method name to map Invoker Map
+            // state change
+            // If the calculation is wrong, it is not processed.
+            if (newUrlInvokerMap == null || newUrlInvokerMap.size() == 0) {
+                logger.error(new IllegalStateException("urls to invokers error .invokerUrls.size :" + invokerUrls.size() + ", invoker.size :0. urls :" + invokerUrls.toString()));
+                return;
+            }
+            this.methodInvokerMap = multiGroup ? toMergeMethodInvokerMap(newMethodInvokerMap) : newMethodInvokerMap;
+            this.urlInvokerMap = newUrlInvokerMap;
+            try {
+                destroyUnusedInvokers(oldUrlInvokerMap, newUrlInvokerMap); // Close the unused Invoker
+            } catch (Exception e) {
+                logger.warn("destroyUnusedInvokers error. ", e);
+            }
+        }
+    }
 ```

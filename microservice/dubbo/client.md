@@ -259,14 +259,14 @@ XxxService xxxService = reference.get(); // 注意：此代理对象内部封装
         return (T) proxyFactory.getProxy(invoker);
     }
 ```
-先分析在单注册中心和多注册中心服务引入的区别，源码如下：  
+此处protocol为```RegistryProtocol```，源码如下：  
 ```
     @Override
     @SuppressWarnings("unchecked")
     public <T> Invoker<T> refer(Class<T> type, URL url) throws RpcException {
         //此处protocol一般情况下应为dubbo
         url = url.setProtocol(url.getParameter(Constants.REGISTRY_KEY, Constants.DEFAULT_REGISTRY)).removeParameter(Constants.REGISTRY_KEY);
-        Registry registry = registryFactory.getRegistry(url);//根据自适应扩展此处registryFactory应为DubboRegistryFactory
+        Registry registry = registryFactory.getRegistry(url);//根据自适应扩展此处registryFactory应为DubboRegistryFactory,也就是此处会调用DubboProtocol，此处逻辑具体在服务字典分析
         //根据示例，此处type=XxxService.class
         if (RegistryService.class.equals(type)) {
             return proxyFactory.getInvoker((T) registry, type, url);
@@ -310,47 +310,81 @@ XxxService xxxService = reference.get(); // 注意：此代理对象内部封装
         return invoker;
     }
 ```
-此处我们查看```RegistryDirectory.subscribe()```源码：  
+此处我们查看```DubboProtocol.refer()```源码：  
 ```
-    public void subscribe(URL url) {
-        setConsumerUrl(url);
-        registry.subscribe(url, this);//由上文可知此处为DUBBORegistry
+    @Override
+    public <T> Invoker<T> refer(Class<T> serviceType, URL url) throws RpcException {
+        optimizeSerialization(url);
+        // create rpc invoker.
+        DubboInvoker<T> invoker = new DubboInvoker<T>(serviceType, url, getClients(url), invokers);
+        invokers.add(invoker);
+        return invoker;
     }
-```
-如果不清楚registry的属性和构造方式，可能对接下来的逻辑会一头雾水，所以在此之前我们先看registry如何构造的，构造registry都做了些什么：  
-```
-    public Registry getRegistry(URL url) {
-        url = url.setPath(RegistryService.class.getName())
-                .addParameter(Constants.INTERFACE_KEY, RegistryService.class.getName())
-                .removeParameters(Constants.EXPORT_KEY, Constants.REFER_KEY);
-        //判断缓存是否存在registry，如果不存在就生成
-        registry = createRegistry(url);
-    }
-    //DubboRegistryFactory
-    public Registry createRegistry(URL url) {
-        url = getRegistryURL(url);
-        List<URL> urls = new ArrayList<URL>();
-        urls.add(url.removeParameter(Constants.BACKUP_KEY));
-        String backup = url.getParameter(Constants.BACKUP_KEY);
-        if (backup != null && backup.length() > 0) {
-            String[] addresses = Constants.COMMA_SPLIT_PATTERN.split(backup);
-            for (String address : addresses) {
-                urls.add(url.setAddress(address));
+    //创建client，连接dubbo server
+    private ExchangeClient[] getClients(URL url) {
+        // whether to share connection
+        boolean service_share_connect = false;
+        int connections = url.getParameter(Constants.CONNECTIONS_KEY, 0);
+        // connections 默认情况下是无，也就是取默认值0
+        if (connections == 0) {
+            service_share_connect = true;
+            connections = 1;
+        }
+
+        ExchangeClient[] clients = new ExchangeClient[connections];
+        for (int i = 0; i < clients.length; i++) {
+            if (service_share_connect) {
+                clients[i] = getSharedClient(url);//最终也是调用的initClient()
+            } else {
+                clients[i] = initClient(url);
             }
         }
-        RegistryDirectory<RegistryService> directory = new RegistryDirectory<RegistryService>(RegistryService.class, url.addParameter(Constants.INTERFACE_KEY, RegistryService.class.getName()).addParameterAndEncoded(Constants.REFER_KEY, url.toParameterString()));
-        Invoker<RegistryService> registryInvoker = cluster.join(directory);//此处为FailoverCluster的包装类MockClusterInvoker
-        RegistryService registryService = proxyFactory.getProxy(registryInvoker);//生成Registry代理类
-        DubboRegistry registry = new DubboRegistry(registryInvoker, registryService);
-        directory.setRegistry(registry);
-        directory.setProtocol(protocol);
-        //通知订阅
-        directory.notify(urls);
-        directory.subscribe(new URL(Constants.CONSUMER_PROTOCOL, NetUtils.getLocalHost(), 0, RegistryService.class.getName(), url.getParameters()));
-        return registry;
+        return clients;
+    }
+
+    private ExchangeClient initClient(URL url) {
+
+        // 默认是NettyClient
+        String str = url.getParameter(Constants.CLIENT_KEY, url.getParameter(Constants.SERVER_KEY, Constants.DEFAULT_REMOTING_CLIENT));
+        // 编码解码默认是DubboCodec
+        url = url.addParameter(Constants.CODEC_KEY, DubboCodec.NAME);
+        // 心跳时间，如果没设置默认是一分钟
+        url = url.addParameterIfAbsent(Constants.HEARTBEAT_KEY, String.valueOf(Constants.DEFAULT_HEARTBEAT));
+
+        // BIO is not allowed since it has severe performance issue.
+        if (str != null && str.length() > 0 && !ExtensionLoader.getExtensionLoader(Transporter.class).hasExtension(str)) {
+            throw new RpcException("Unsupported client type: " + str + "," +
+                    " supported client type is " + StringUtils.join(ExtensionLoader.getExtensionLoader(Transporter.class).getSupportedExtensions(), " "));
+        }
+
+        ExchangeClient client;
+        try {
+            // 如果这是lazy则会延迟加载，其实是一个包装类，等用到了再调用client的init方法，也就是调用connect方法
+            if (url.getParameter(Constants.LAZY_CONNECT_KEY, false)) {
+                client = new LazyConnectExchangeClient(url, requestHandler);
+            } else {
+                client = Exchangers.connect(url, requestHandler);
+            }
+        } catch (RemotingException e) {
+            throw new RpcException("Fail to create remoting client for service(" + url + "): " + e.getMessage(), e);
+        }
+        return client;
     }
 ```
-首先先看```Registry```代理类生成：  
+接下来就是```Exchangers```的connect逻辑了：  
+```
+    public static ExchangeClient connect(URL url, ExchangeHandler handler) throws RemotingException {
+        if (url == null) {
+            throw new IllegalArgumentException("url == null");
+        }
+        if (handler == null) {
+            throw new IllegalArgumentException("handler == null");
+        }
+        url = url.addParameterIfAbsent(Constants.CODEC_KEY, "exchange");
+        return getExchanger(url).connect(url, handler);//相似的流程，接下来不做太多分析
+    }
+```
+```DubboProtocol```实现了和server端服务的连接，```RegistryProtocol```剩余部分则是服务的获取和服务变更的监听，这一部分会在服务字典相关分析，服务获取完毕会判断注册中心数量，如果是多个注册中心则封装成集群invoke，然后生成invoke代理，代理类生成逻辑：  
 ```
     @Override
     public <T> T getProxy(Invoker<T> invoker) throws RpcException {
@@ -576,131 +610,4 @@ public class Proxy0 implement Proxy{
         return invoker.invoke(new RpcInvocation(method, args)).recreate();
     }
 ```
-此处```invoker```为之前注入```MockClusterInvoker```，查看源码：  
-```
-    @Override
-    public Result invoke(Invocation invocation) throws RpcException {
-        Result result = null;
-
-        String value = directory.getUrl().getMethodParameter(invocation.getMethodName(), Constants.MOCK_KEY, Boolean.FALSE.toString()).trim();
-        if (value.length() == 0 || value.equalsIgnoreCase("false")) {
-            //调用逻辑为非mock，此处invoker为FailOverClusterInvoker
-            result = this.invoker.invoke(invocation);
-        } else if (value.startsWith("force")) {
-            if (logger.isWarnEnabled()) {
-                logger.info("force-mock: " + invocation.getMethodName() + " force-mock enabled , url : " + directory.getUrl());
-            }
-            //force:direct mock
-            result = doMockInvoke(invocation, null);
-        } else {
-            //fail-mock
-            try {
-                result = this.invoker.invoke(invocation);
-            } catch (RpcException e) {
-                if (e.isBiz()) {
-                    throw e;
-                } else {
-                    if (logger.isWarnEnabled()) {
-                        logger.warn("fail-mock: " + invocation.getMethodName() + " fail-mock enabled , url : " + directory.getUrl(), e);
-                    }
-                    result = doMockInvoke(invocation, e);
-                }
-            }
-        }
-        return result;
-    }
-```
-此处先放一张官方文档调用流程然后再根据此流程分析：  
-```
-proxy0#sayHello(String)
-  —> InvokerInvocationHandler#invoke(Object, Method, Object[])
-    —> MockClusterInvoker#invoke(Invocation)
-      —> AbstractClusterInvoker#invoke(Invocation)
-        —> FailoverClusterInvoker#doInvoke(Invocation, List<Invoker<T>>, LoadBalance)
-          —> Filter#invoke(Invoker, Invocation)  // 包含多个 Filter 调用
-            —> ListenerInvokerWrapper#invoke(Invocation) 
-              —> AbstractInvoker#invoke(Invocation) 
-                —> DubboInvoker#doInvoke(Invocation)
-                  —> ReferenceCountExchangeClient#request(Object, int)
-                    —> HeaderExchangeClient#request(Object, int)
-                      —> HeaderExchangeChannel#request(Object, int)
-                        —> AbstractPeer#send(Object)
-                          —> AbstractClient#send(Object, boolean)
-                            —> NettyChannel#send(Object, boolean)
-                              —> NioClientSocketChannel#write(Object)
-```
-由该流程和上文源码可知调用流程源码如下：  
-```
-    //AbstractClusterInvoker
-    @Override
-    public Result invoke(final Invocation invocation) throws RpcException {
-        checkWhetherDestroyed();//检测是否已经被销毁，一般情况不是
-        LoadBalance loadbalance = null;//负载均衡器，如无特殊指定，此处应该为Random
-        List<Invoker<T>> invokers = list(invocation);
-        if (invokers != null && !invokers.isEmpty()) {
-            loadbalance = ExtensionLoader.getExtensionLoader(LoadBalance.class).getExtension(invokers.get(0).getUrl()
-                    .getMethodParameter(invocation.getMethodName(), Constants.LOADBALANCE_KEY, Constants.DEFAULT_LOADBALANCE));
-        }
-        RpcUtils.attachInvocationIdIfAsync(getUrl(), invocation);
-        return doInvoke(invocation, invokers, loadbalance);
-    }
-    //FailoverClusterInvoker
-        public Result doInvoke(Invocation invocation, final List<Invoker<T>> invokers, LoadBalance loadbalance) throws RpcException {
-        List<Invoker<T>> copyinvokers = invokers;
-        checkInvokers(copyinvokers, invocation);
-        int len = getUrl().getMethodParameter(invocation.getMethodName(), Constants.RETRIES_KEY, Constants.DEFAULT_RETRIES) + 1;
-        if (len <= 0) {
-            len = 1;
-        }
-        // retry loop.
-        RpcException le = null; // last exception.
-        List<Invoker<T>> invoked = new ArrayList<Invoker<T>>(copyinvokers.size()); // invoked invokers.
-        Set<String> providers = new HashSet<String>(len);
-        for (int i = 0; i < len; i++) {
-            //Reselect before retry to avoid a change of candidate `invokers`.
-            //NOTE: if `invokers` changed, then `invoked` also lose accuracy.
-            if (i > 0) {
-                checkWhetherDestroyed();
-                copyinvokers = list(invocation);
-                // 重试时再次检测
-                checkInvokers(copyinvokers, invocation);
-            }
-            //使用随机负载均衡策略随机选择invoker
-            Invoker<T> invoker = select(loadbalance, invocation, copyinvokers, invoked);
-            invoked.add(invoker);
-            RpcContext.getContext().setInvokers((List) invoked);
-            try {
-                Result result = invoker.invoke(invocation);
-                if (le != null && logger.isWarnEnabled()) {
-                    logger.warn("Although retry the method " + invocation.getMethodName()
-                            + " in the service " + getInterface().getName()
-                            + " was successful by the provider " + invoker.getUrl().getAddress()
-                            + ", but there have been failed providers " + providers
-                            + " (" + providers.size() + "/" + copyinvokers.size()
-                            + ") from the registry " + directory.getUrl().getAddress()
-                            + " on the consumer " + NetUtils.getLocalHost()
-                            + " using the dubbo version " + Version.getVersion() + ". Last error is: "
-                            + le.getMessage(), le);
-                }
-                return result;
-            } catch (RpcException e) {
-                if (e.isBiz()) { // biz exception.
-                    throw e;
-                }
-                le = e;
-            } catch (Throwable e) {
-                le = new RpcException(e.getMessage(), e);
-            } finally {
-                providers.add(invoker.getUrl().getAddress());
-            }
-        }
-        throw new RpcException(le != null ? le.getCode() : 0, "Failed to invoke the method "
-                + invocation.getMethodName() + " in the service " + getInterface().getName()
-                + ". Tried " + len + " times of the providers " + providers
-                + " (" + providers.size() + "/" + copyinvokers.size()
-                + ") from the registry " + directory.getUrl().getAddress()
-                + " on the consumer " + NetUtils.getLocalHost() + " using the dubbo version "
-                + Version.getVersion() + ". Last error is: "
-                + (le != null ? le.getMessage() : ""), le != null && le.getCause() != null ? le.getCause() : le);
-    }
-```
+至此，服务引入相关逻辑已经分析完毕，剩余服务调用，字典，负载均衡在其他对应模块分析。  
