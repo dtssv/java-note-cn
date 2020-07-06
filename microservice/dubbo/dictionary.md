@@ -65,7 +65,7 @@ public class StaticDirectory<T> extends AbstractDirectory<T> {
 
 }
 ```
-逻辑相对简单，无深入分析的必要性，下面我们着重开始分析```RegistryDirectory```，首先我们先看一下这个类的定义：
+逻辑相对简单，无深入分析的必要性，下面我们着重开始分析```RegistryDirectory```，首先我们先看一下这个类的定义：  
 ```
 public class RegistryDirectory<T> extends AbstractDirectory<T> implements NotifyListener
 ```
