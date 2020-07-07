@@ -31,6 +31,7 @@
 |available|AvailableClusterInvoker|调用第一个可用的服务提供者|    |
 |mergeable|MergeableClusterInvoker|   |    |
 |broadcast|BroadcastClusterInvoker|广播|通知所有服务更新信息|    |   
+
 从上到下以次分析如何实现。  
 ```FailoverClusterInvoker```（默认）:  
 ```
