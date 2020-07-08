@@ -480,6 +480,7 @@ public class Transporter$Adaptive implements Transporter{
                         + ", " + clazz.getClass().getName());
             }
         } else if (isWrapperClass(clazz)) {
+            //是否包装类，包装类的判断条件是是否存在相同类型的构造器，如public Protocol(Protocol protcol){}，这样认为这个类是一个包装类
             Set<Class<?>> wrappers = cachedWrapperClasses;
             if (wrappers == null) {
                 cachedWrapperClasses = new ConcurrentHashSet<Class<?>>();
@@ -558,5 +559,33 @@ public class AdaptiveExtensionFactory implements ExtensionFactory {
         return null;
     }
     //SpringExtensionFactory逻辑分析忽略
+```
+前边是自适应扩展相关逻辑的实现，最终还是要获取到实现类才能完成功能，实现类的构造由```createExtension```完成，逻辑如下：  
+```
+    private T createExtension(String name) {
+        Class<?> clazz = getExtensionClasses().get(name);
+        if (clazz == null) {
+            throw findException(name);
+        }
+        try {
+            T instance = (T) EXTENSION_INSTANCES.get(clazz);
+            if (instance == null) {
+                EXTENSION_INSTANCES.putIfAbsent(clazz, clazz.newInstance());
+                instance = (T) EXTENSION_INSTANCES.get(clazz);
+            }
+            injectExtension(instance);//生成构造类并注入
+            Set<Class<?>> wrapperClasses = cachedWrapperClasses;
+            if (wrapperClasses != null && !wrapperClasses.isEmpty()) {
+                for (Class<?> wrapperClass : wrapperClasses) {
+                    //如果包装类不为空，则生成包装类并注入
+                    instance = injectExtension((T) wrapperClass.getConstructor(type).newInstance(instance));
+                }
+            }
+            return instance;
+        } catch (Throwable t) {
+            throw new IllegalStateException("Extension instance(name: " + name + ", class: " +
+                    type + ")  could not be instantiated: " + t.getMessage(), t);
+        }
+    }
 ```
 自适应扩展和```SPI```其实是相辅相成的，不过因为自适应扩展逻辑较多所以分开分析。
