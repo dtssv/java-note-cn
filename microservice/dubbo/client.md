@@ -563,7 +563,7 @@ XxxService xxxService = reference.get(); // 注意：此代理对象内部封装
 ```
 package org.apache.dubbo.common.bytecode;
 
-public class proxy0 implements EchoService,RegistryService {
+public class proxy0 implements ClassGenerator.DC,EchoService,XxxService {
 
     public static java.lang.reflect.Method[] methods;
 
@@ -583,7 +583,7 @@ public class proxy0 implements EchoService,RegistryService {
         return (java.lang.String) ret;
     }
 
-    public void register(URL arg0){
+    public void demo(String arg0){
         Object[] args = new Object[1];
         args[0] = ($w) $1;
         Object ret = handler.invoke(this, methods[1], args);
