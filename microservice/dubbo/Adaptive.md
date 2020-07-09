@@ -502,6 +502,7 @@ public class Transporter$Adaptive implements Transporter{
             }
             String[] names = NAME_SEPARATOR.split(name);
             if (names != null && names.length > 0) {
+                //如果类被@Activate注解修饰，则将注解放入cachedActivates
                 Activate activate = clazz.getAnnotation(Activate.class);
                 if (activate != null) {
                     cachedActivates.put(names[0], activate);

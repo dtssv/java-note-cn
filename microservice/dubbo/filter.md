@@ -120,4 +120,91 @@ public class CacheFilter implements Filter {
 }
 ```
 由其上注解的group可知，它为consumer和provider同时提供服务，它的逻辑是如果能从缓存中获取到结果就直接返回，不再调用远程服务，如果没有命中缓存则调用远程服务获取结果。  
-下边我们实现一个自定义的filter，它的作用是每次请求都打印日志```hello```
+下边我们实现一个自定义的filter，它的作用是每次请求都打印日志```hello```，代码如下：  
+```
+@Activate(group = {Constants.CONSUMER, Constants.PROVIDER})
+public class HelloFilter implements Filter {
+
+    private static final Logger logger = LoggerFactory.getLogger(HelloFilter.class);
+
+    @Override
+    public Result invoke(Invoker<?> invoker, Invocation invocation) throws RpcException {
+        logger.info("hello");
+        return invoker.invoke(invocation);
+    }
+}
+
+```
+创建文件```META-INF/dubbo/com.alibaba.dubbo.rpc.Filter```，内容如下```hello=com.hello.HelloFilter```，然后自己的filter就实现了。
+最后我们看下dubbo filter的激活机制，逻辑在```ExtensionLoader.getExtensionLoader(Filter.class).getActivateExtension(invoker.getUrl(), key, group)```：  
+```
+    public List<T> getActivateExtension(URL url, String key, String group) {
+        String value = url.getParameter(key);
+        return getActivateExtension(url, value == null || value.length() == 0 ? null : Constants.COMMA_SPLIT_PATTERN.split(value), group);
+    }
+
+    public List<T> getActivateExtension(URL url, String[] values, String group) {
+        List<T> exts = new ArrayList<T>();
+        List<String> names = values == null ? new ArrayList<String>(0) : Arrays.asList(values);
+        //如果names不包含-default的key，则走这里
+        if (!names.contains(Constants.REMOVE_VALUE_PREFIX + Constants.DEFAULT_KEY)) {
+            getExtensionClasses();//加载扩展类
+            for (Map.Entry<String, Activate> entry : cachedActivates.entrySet()) {
+                String name = entry.getKey();
+                Activate activate = entry.getValue();
+                if (isMatchGroup(group, activate.group())) {//是否匹配，即是注解里的group
+                    T ext = getExtension(name);
+                    if (!names.contains(name)
+                            && !names.contains(Constants.REMOVE_VALUE_PREFIX + name)
+                            && isActive(activate, url)) {
+                                //names里不包含当前key，且不包含-name的key，且当前类适用于请求则放到列表里
+                        exts.add(ext);
+                    }
+                }
+            }
+            Collections.sort(exts, ActivateComparator.COMPARATOR);
+        }
+        //加载用户自定义filter
+        List<T> usrs = new ArrayList<T>();
+        for (int i = 0; i < names.size(); i++) {
+            String name = names.get(i);
+            //如果name不是以-开头，并且names不包含-name
+            if (!name.startsWith(Constants.REMOVE_VALUE_PREFIX)
+                    && !names.contains(Constants.REMOVE_VALUE_PREFIX + name)) {
+                        //如果当前name=default，则将自定义filter放在首位
+                if (Constants.DEFAULT_KEY.equals(name)) {
+                    if (!usrs.isEmpty()) {
+                        exts.addAll(0, usrs);
+                        usrs.clear();
+                    }
+                } else {
+                    T ext = getExtension(name);
+                    usrs.add(ext);
+                }
+            }
+        }
+        if (!usrs.isEmpty()) {
+            exts.addAll(usrs);
+        }
+        return exts;
+    }
+    //是否激活判断
+    private boolean isActive(Activate activate, URL url) {
+        String[] keys = activate.value();
+        if (keys.length == 0) {
+            return true;//如果activate.vlaue=null，则默认是开启
+        }
+        for (String key : keys) {
+            for (Map.Entry<String, String> entry : url.getParameters().entrySet()) {
+                String k = entry.getKey();
+                String v = entry.getValue();
+                //如果url.parameters包含key，或者包含以.key结尾的key，且value不等于空，则是激活状态
+                if ((k.equals(key) || k.endsWith("." + key))
+                        && ConfigUtils.isNotEmpty(v)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+```
