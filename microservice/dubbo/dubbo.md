@@ -1,3 +1,5 @@
+Dubbo是Alibaba开源的一款RPC框架，官方架构图如下：  
+![架构图](http://dubbo.apache.org/docs/zh-cn/user/sources/images/dubbo-architecture.jpg)
 [SPI](SPI.md)  
 [自适应扩展](Adaptive.md)  
 [服务导出](server.md)  
