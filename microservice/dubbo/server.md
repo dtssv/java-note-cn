@@ -354,6 +354,7 @@ protected List<URL> loadRegistries(boolean provider) {
                         if (logger.isInfoEnabled()) {
                             logger.info("Register dubbo service " + interfaceClass.getName() + " url " + url + " to registry " + registryURL);
                         }
+                        //生成包装类
                         Invoker<?> invoker = proxyFactory.getInvoker(ref, (Class) interfaceClass, registryURL.addParameterAndEncoded(Constants.EXPORT_KEY, url.toFullString()));
                         DelegateProviderMetaDataInvoker wrapperInvoker = new DelegateProviderMetaDataInvoker(invoker, this);
                         // 导出服务，并生成 Exporter，此处获取的protocol为registry类型，RegistryProtocol为DubboProtocol的包装类
@@ -372,6 +373,252 @@ protected List<URL> loadRegistries(boolean provider) {
         }
         this.urls.add(url);
     }
+```
+这里先生成包装类，然后在调用导出方法，首先先看一下包装类生成逻辑：  
+```
+    //JavassistProxyFactory
+    public <T> Invoker<T> getInvoker(T proxy, Class<T> type, URL url) {
+        // TODO Wrapper cannot handle this scenario correctly: the classname contains '$'
+        final Wrapper wrapper = Wrapper.getWrapper(proxy.getClass().getName().indexOf('$') < 0 ? proxy.getClass() : type);
+        return new AbstractProxyInvoker<T>(proxy, type, url) {
+            @Override
+            protected Object doInvoke(T proxy, String methodName,
+                                      Class<?>[] parameterTypes,
+                                      Object[] arguments) throws Throwable {
+                return wrapper.invokeMethod(proxy, methodName, parameterTypes, arguments);
+            }
+        };
+    }
+    //Wrapper
+    public static Wrapper getWrapper(Class<?> c) {
+        while (ClassGenerator.isDynamicClass(c)) // can not wrapper on dynamic class.
+            c = c.getSuperclass();
+
+        if (c == Object.class)
+            return OBJECT_WRAPPER;
+
+        Wrapper ret = WRAPPER_MAP.get(c);
+        if (ret == null) {
+            ret = makeWrapper(c);
+            WRAPPER_MAP.put(c, ret);
+        }
+        return ret;
+    }
+    //生成包装类
+    private static Wrapper makeWrapper(Class<?> c) {
+        if (c.isPrimitive())
+            throw new IllegalArgumentException("Can not create wrapper for primitive type: " + c);
+
+        String name = c.getName();
+        ClassLoader cl = ClassHelper.getClassLoader(c);
+
+        StringBuilder c1 = new StringBuilder("public void setPropertyValue(Object o, String n, Object v){ ");
+        StringBuilder c2 = new StringBuilder("public Object getPropertyValue(Object o, String n){ ");
+        StringBuilder c3 = new StringBuilder("public Object invokeMethod(Object o, String n, Class[] p, Object[] v) throws " + InvocationTargetException.class.getName() + "{ ");
+
+        c1.append(name).append(" w; try{ w = ((").append(name).append(")$1); }catch(Throwable e){ throw new IllegalArgumentException(e); }");
+        c2.append(name).append(" w; try{ w = ((").append(name).append(")$1); }catch(Throwable e){ throw new IllegalArgumentException(e); }");
+        c3.append(name).append(" w; try{ w = ((").append(name).append(")$1); }catch(Throwable e){ throw new IllegalArgumentException(e); }");
+
+        Map<String, Class<?>> pts = new HashMap<String, Class<?>>(); // <property name, property types>
+        Map<String, Method> ms = new LinkedHashMap<String, Method>(); // <method desc, Method instance>
+        List<String> mns = new ArrayList<String>(); // method names.
+        List<String> dmns = new ArrayList<String>(); // declaring method names.
+
+        // get all public field.
+        for (Field f : c.getFields()) {
+            String fn = f.getName();
+            Class<?> ft = f.getType();
+            if (Modifier.isStatic(f.getModifiers()) || Modifier.isTransient(f.getModifiers()))
+                continue;
+
+            c1.append(" if( $2.equals(\"").append(fn).append("\") ){ w.").append(fn).append("=").append(arg(ft, "$3")).append("; return; }");
+            c2.append(" if( $2.equals(\"").append(fn).append("\") ){ return ($w)w.").append(fn).append("; }");
+            pts.put(fn, ft);
+        }
+
+        Method[] methods = c.getMethods();
+        // get all public method.
+        boolean hasMethod = hasMethods(methods);
+        if (hasMethod) {
+            c3.append(" try{");
+        }
+        for (Method m : methods) {
+            if (m.getDeclaringClass() == Object.class) //ignore Object's method.
+                continue;
+
+            String mn = m.getName();
+            c3.append(" if( \"").append(mn).append("\".equals( $2 ) ");
+            int len = m.getParameterTypes().length;
+            c3.append(" && ").append(" $3.length == ").append(len);
+
+            boolean override = false;
+            for (Method m2 : methods) {
+                if (m != m2 && m.getName().equals(m2.getName())) {
+                    override = true;
+                    break;
+                }
+            }
+            if (override) {
+                if (len > 0) {
+                    for (int l = 0; l < len; l++) {
+                        c3.append(" && ").append(" $3[").append(l).append("].getName().equals(\"")
+                                .append(m.getParameterTypes()[l].getName()).append("\")");
+                    }
+                }
+            }
+
+            c3.append(" ) { ");
+
+            if (m.getReturnType() == Void.TYPE)
+                c3.append(" w.").append(mn).append('(').append(args(m.getParameterTypes(), "$4")).append(");").append(" return null;");
+            else
+                c3.append(" return ($w)w.").append(mn).append('(').append(args(m.getParameterTypes(), "$4")).append(");");
+
+            c3.append(" }");
+
+            mns.add(mn);
+            if (m.getDeclaringClass() == c)
+                dmns.add(mn);
+            ms.put(ReflectUtils.getDesc(m), m);
+        }
+        if (hasMethod) {
+            c3.append(" } catch(Throwable e) { ");
+            c3.append("     throw new java.lang.reflect.InvocationTargetException(e); ");
+            c3.append(" }");
+        }
+
+        c3.append(" throw new " + NoSuchMethodException.class.getName() + "(\"Not found method \\\"\"+$2+\"\\\" in class " + c.getName() + ".\"); }");
+
+        // deal with get/set method.
+        Matcher matcher;
+        for (Map.Entry<String, Method> entry : ms.entrySet()) {
+            String md = entry.getKey();
+            Method method = (Method) entry.getValue();
+            if ((matcher = ReflectUtils.GETTER_METHOD_DESC_PATTERN.matcher(md)).matches()) {
+                String pn = propertyName(matcher.group(1));
+                c2.append(" if( $2.equals(\"").append(pn).append("\") ){ return ($w)w.").append(method.getName()).append("(); }");
+                pts.put(pn, method.getReturnType());
+            } else if ((matcher = ReflectUtils.IS_HAS_CAN_METHOD_DESC_PATTERN.matcher(md)).matches()) {
+                String pn = propertyName(matcher.group(1));
+                c2.append(" if( $2.equals(\"").append(pn).append("\") ){ return ($w)w.").append(method.getName()).append("(); }");
+                pts.put(pn, method.getReturnType());
+            } else if ((matcher = ReflectUtils.SETTER_METHOD_DESC_PATTERN.matcher(md)).matches()) {
+                Class<?> pt = method.getParameterTypes()[0];
+                String pn = propertyName(matcher.group(1));
+                c1.append(" if( $2.equals(\"").append(pn).append("\") ){ w.").append(method.getName()).append("(").append(arg(pt, "$3")).append("); return; }");
+                pts.put(pn, pt);
+            }
+        }
+        c1.append(" throw new " + NoSuchPropertyException.class.getName() + "(\"Not found property \\\"\"+$2+\"\\\" filed or setter method in class " + c.getName() + ".\"); }");
+        c2.append(" throw new " + NoSuchPropertyException.class.getName() + "(\"Not found property \\\"\"+$2+\"\\\" filed or setter method in class " + c.getName() + ".\"); }");
+
+        // make class
+        long id = WRAPPER_CLASS_COUNTER.getAndIncrement();
+        ClassGenerator cc = ClassGenerator.newInstance(cl);
+        cc.setClassName((Modifier.isPublic(c.getModifiers()) ? Wrapper.class.getName() : c.getName() + "$sw") + id);
+        cc.setSuperClass(Wrapper.class);
+
+        cc.addDefaultConstructor();
+        cc.addField("public static String[] pns;"); // property name array.
+        cc.addField("public static " + Map.class.getName() + " pts;"); // property type map.
+        cc.addField("public static String[] mns;"); // all method name array.
+        cc.addField("public static String[] dmns;"); // declared method name array.
+        for (int i = 0, len = ms.size(); i < len; i++)
+            cc.addField("public static Class[] mts" + i + ";");
+
+        cc.addMethod("public String[] getPropertyNames(){ return pns; }");
+        cc.addMethod("public boolean hasProperty(String n){ return pts.containsKey($1); }");
+        cc.addMethod("public Class getPropertyType(String n){ return (Class)pts.get($1); }");
+        cc.addMethod("public String[] getMethodNames(){ return mns; }");
+        cc.addMethod("public String[] getDeclaredMethodNames(){ return dmns; }");
+        cc.addMethod(c1.toString());
+        cc.addMethod(c2.toString());
+        cc.addMethod(c3.toString());
+
+        try {
+            Class<?> wc = cc.toClass();
+            // setup static field.
+            wc.getField("pts").set(null, pts);
+            wc.getField("pns").set(null, pts.keySet().toArray(new String[0]));
+            wc.getField("mns").set(null, mns.toArray(new String[0]));
+            wc.getField("dmns").set(null, dmns.toArray(new String[0]));
+            int ix = 0;
+            for (Method m : ms.values())
+                wc.getField("mts" + ix++).set(null, m.getParameterTypes());
+            return (Wrapper) wc.newInstance();
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable e) {
+            throw new RuntimeException(e.getMessage(), e);
+        } finally {
+            cc.release();
+            ms.clear();
+            mns.clear();
+            dmns.clear();
+        }
+    }
+```
+最终生成包装类逻辑如下：  
+```
+public class Wrapper0 extend Wrapper{
+    public Wrapper0(){
+
+    }
+    public static String[] pns;
+    public static Map pts;
+    public static String[] mns;
+    public static String[] dmns;
+    public String[] getPropertyNames(){ return pns; }
+    public boolean hasProperty(String n){ return pts.containsKey(n); }
+    public Class getPropertyType(String n){ return (Class)pts.get(n); }
+    public String[] getMethodNames(){ return mns; }
+    public String[] getDeclaredMethodNames(){ return dmns; }
+    public void setPropertyValue(Object o, String n, Object v){
+        XxxService w;
+        try{
+            w = ((XxxService)o);
+        }catch(Throwable e){ 
+            throw new IllegalArgumentException(e); 
+        }
+        //if(n.equals("")){
+        //如果有filed的话，一般情况下接口都无
+        //}
+        throw new NoSuchPropertyException("Not found property "+n+" filed or setter method in class XxxService.");
+    }
+    public void getPropertyValue(Object o, String n){
+        XxxService w;
+        try{
+            w = ((XxxService)o);
+        }catch(Throwable e){ 
+            throw new IllegalArgumentException(e); 
+        }
+        //if(n.equals("")){
+        //如果有filed的话，一般情况下接口都无
+        //}
+        throw new NoSuchPropertyException("Not found property "+n+" filed or setter method in class XxxService.");
+    }
+    public Object invokeMethod(Object o, String n, Class[] p, Object[] v) throws InvocationTargetException{
+        XxxService w;
+        try{
+            w = ((XxxService)o);
+        }catch(Throwable e){ 
+            throw new IllegalArgumentException(e); 
+        }
+        try{
+            if("demo".equals(n) && p.length=1){//根据方法不同，此处数字可能会不同，实例只有一个参数，如果方法被重写的话，会判断每一位的参数是否一致
+                //无返回值
+                w.demo((String)v[0]);//此处会根据参数类型进行格式转换
+                return null;
+                //有返回值
+                return (String)w.demo((String)v[0]);
+            } catch(Throwable e) {
+                throw new java.lang.reflect.InvocationTargetException(e);
+            }
+            throw new NoSuchMethodException("Not found method " + n + " in class XxxService.");
+        }
+    }
+}
 ```
 此处分析```RegistryProtocol.export(Invoker)```的源码如下:  
 ```

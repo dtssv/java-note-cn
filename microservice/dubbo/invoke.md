@@ -242,3 +242,113 @@ public class InvokerInvocationHandler implements InvocationHandler {
 ```
 到此，消费者发送请求逻辑就分析完毕。  
 ### server处理请求
+服务端收到请求解码完成后会调用```NettyHandler.messageReceived```，这里会调用```MultiMessageHandler.received```方法，然后调用```HeartbeatHandler.received```->```AllChannelHandler.received```，这里会启动一个线程来执行后续逻辑：  
+```
+    public void received(Channel channel, Object message) throws RemotingException {
+        ExecutorService cexecutor = getExecutorService();
+        try {
+            cexecutor.execute(new ChannelEventRunnable(channel, handler, ChannelState.RECEIVED, message));
+        } catch (Throwable t) {
+            //TODO A temporary solution to the problem that the exception information can not be sent to the opposite end after the thread pool is full. Need a refactoring
+            //fix The thread pool is full, refuses to call, does not return, and causes the consumer to wait for time out
+        	if(message instanceof Request && t instanceof RejectedExecutionException){
+        		Request request = (Request)message;
+        		if(request.isTwoWay()){
+        			String msg = "Server side(" + url.getIp() + "," + url.getPort() + ") threadpool is exhausted ,detail msg:" + t.getMessage();
+        			Response response = new Response(request.getId(), request.getVersion());
+        			response.setStatus(Response.SERVER_THREADPOOL_EXHAUSTED_ERROR);
+        			response.setErrorMessage(msg);
+        			channel.send(response);
+        			return;
+        		}
+        	}
+            throw new ExecutionException(message, channel, getClass() + " error when process received event .", t);
+        }
+    }
+```
+由服务导出过程可知，此处handler为```DubboProtocol```中定义的内部类：  
+```
+    private ExchangeHandler requestHandler = new ExchangeHandlerAdapter() {
+
+        @Override
+        public Object reply(ExchangeChannel channel, Object message) throws RemotingException {
+            if (message instanceof Invocation) {
+                Invocation inv = (Invocation) message;
+                Invoker<?> invoker = getInvoker(channel, inv);
+                // need to consider backward-compatibility if it's a callback
+                if (Boolean.TRUE.toString().equals(inv.getAttachments().get(IS_CALLBACK_SERVICE_INVOKE))) {
+                    String methodsStr = invoker.getUrl().getParameters().get("methods");
+                    boolean hasMethod = false;
+                    if (methodsStr == null || methodsStr.indexOf(",") == -1) {
+                        hasMethod = inv.getMethodName().equals(methodsStr);
+                    } else {
+                        String[] methods = methodsStr.split(",");
+                        for (String method : methods) {
+                            if (inv.getMethodName().equals(method)) {
+                                hasMethod = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!hasMethod) {
+                        logger.warn(new IllegalStateException("The methodName " + inv.getMethodName()
+                                + " not found in callback service interface ,invoke will be ignored."
+                                + " please update the api interface. url is:"
+                                + invoker.getUrl()) + " ,invocation is :" + inv);
+                        return null;
+                    }
+                }
+                RpcContext.getContext().setRemoteAddress(channel.getRemoteAddress());
+                return invoker.invoke(inv);
+            }
+            throw new RemotingException(channel, "Unsupported request: "
+                    + (message == null ? null : (message.getClass().getName() + ": " + message))
+                    + ", channel: consumer: " + channel.getRemoteAddress() + " --> provider: " + channel.getLocalAddress());
+        }
+
+        @Override
+        public void received(Channel channel, Object message) throws RemotingException {
+            if (message instanceof Invocation) {
+                reply((ExchangeChannel) channel, message);
+            } else {
+                super.received(channel, message);
+            }
+        }
+
+        @Override
+        public void connected(Channel channel) throws RemotingException {
+            invoke(channel, Constants.ON_CONNECT_KEY);
+        }
+
+        @Override
+        public void disconnected(Channel channel) throws RemotingException {
+            if (logger.isInfoEnabled()) {
+                logger.info("disconnected from " + channel.getRemoteAddress() + ",url:" + channel.getUrl());
+            }
+            invoke(channel, Constants.ON_DISCONNECT_KEY);
+        }
+
+        private void invoke(Channel channel, String methodKey) {
+            Invocation invocation = createInvocation(channel, channel.getUrl(), methodKey);
+            if (invocation != null) {
+                try {
+                    received(channel, invocation);
+                } catch (Throwable t) {
+                    logger.warn("Failed to invoke event method " + invocation.getMethodName() + "(), cause: " + t.getMessage(), t);
+                }
+            }
+        }
+```
+调用流程如下：  
+```
+ChannelEventRunnable#run()
+  —> DecodeHandler#received(Channel, Object)
+    —> HeaderExchangeHandler#received(Channel, Object)
+      —> HeaderExchangeHandler#handleRequest(ExchangeChannel, Request)
+        —> DubboProtocol.requestHandler#reply(ExchangeChannel, Object)
+          —> Filter#invoke(Invoker, Invocation)
+            —> AbstractProxyInvoker#invoke(Invocation)
+              —> Wrapper0#invokeMethod(Object, String, Class[], Object[])
+                —> XxxServiceImpl#demo(String)
+```
+至此，dubbo的请求流程就梳理完毕了。
