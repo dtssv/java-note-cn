@@ -44,25 +44,26 @@ public class ContextLoaderListener extends ContextLoader implements ServletConte
 		long startTime = System.currentTimeMillis();
 
 		try {
-			// Store context in local instance variable, to guarantee that
-			// it is available on ServletContext shutdown.
+			// 如果不做特殊设置，此处一般情况下会生成XmlWebApplicationContext.class
+            // 或者也可以指定为AnnotationConfigWebApplicationContext.class，
+            // 也就是通过注解，但是它们都是ConfigurableWebApplicationContext.class的子类
 			if (this.context == null) {
 				this.context = createWebApplicationContext(servletContext);
 			}
 			if (this.context instanceof ConfigurableWebApplicationContext) {
 				ConfigurableWebApplicationContext cwac = (ConfigurableWebApplicationContext) this.context;
+                //此处的isActive()获取的是AtomicBoolean.get()，因为此处还未赋值，所以此处是false，也就是还未refresh
 				if (!cwac.isActive()) {
-					// The context has not yet been refreshed -> provide services such as
-					// setting the parent context, setting the application context id, etc
+					// 初始化此处应为null
 					if (cwac.getParent() == null) {
-						// The context instance was injected without an explicit parent ->
-						// determine parent for root web application context, if any.
+						// 默认实现返回null
 						ApplicationContext parent = loadParentContext(servletContext);
 						cwac.setParent(parent);
 					}
 					configureAndRefreshWebApplicationContext(cwac, servletContext);
 				}
 			}
+            //启动完成，防止org.springframework.web.context.WebApplicationContext.ROOT标识
 			servletContext.setAttribute(WebApplicationContext.ROOT_WEB_APPLICATION_CONTEXT_ATTRIBUTE, this.context);
 
 			ClassLoader ccl = Thread.currentThread().getContextClassLoader();
@@ -85,5 +86,38 @@ public class ContextLoaderListener extends ContextLoader implements ServletConte
 			servletContext.setAttribute(WebApplicationContext.ROOT_WEB_APPLICATION_CONTEXT_ATTRIBUTE, ex);
 			throw ex;
 		}
+	}
+```
+以上方法只是对容器创建的检测和初始化，具体资源文件的加载，配置文件的解析，bean的创建注册都在```configureAndRefreshWebApplicationContext()```这个方法完成：  
+```
+	protected void configureAndRefreshWebApplicationContext(ConfigurableWebApplicationContext wac, ServletContext sc) {
+        //此处如无特殊指定一般情况下会相等
+		if (ObjectUtils.identityToString(wac).equals(wac.getId())) {
+			// 一般情况下是没有特殊指定的，所以会生成默认id，org.springframework.web.context.WebApplicationContext:+项目的ContextPath
+			String idParam = sc.getInitParameter(CONTEXT_ID_PARAM);
+			if (idParam != null) {
+				wac.setId(idParam);
+			}
+			else {
+				// Generate default id...
+				wac.setId(ConfigurableWebApplicationContext.APPLICATION_CONTEXT_ID_PREFIX +
+						ObjectUtils.getDisplayString(sc.getContextPath()));
+			}
+		}
+        //contextConfigLocation，此处加载各种配置文件
+		wac.setServletContext(sc);
+		String configLocationParam = sc.getInitParameter(CONFIG_LOCATION_PARAM);
+		if (configLocationParam != null) {
+			wac.setConfigLocation(configLocationParam);
+		}
+
+		// 此处实现返回StandardServletEnvironment.class，也就是ConfigurableWebEnvironment的子类
+		ConfigurableEnvironment env = wac.getEnvironment();
+		if (env instanceof ConfigurableWebEnvironment) {
+			((ConfigurableWebEnvironment) env).initPropertySources(sc, null);
+		}
+
+		customizeContext(sc, wac);
+		wac.refresh();
 	}
 ```
