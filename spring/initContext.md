@@ -247,13 +247,72 @@ factoryBean刷新方法如下：
 			DefaultListableBeanFactory beanFactory = createBeanFactory();
 			beanFactory.setSerializationId(getId());
 			customizeBeanFactory(beanFactory);
-			loadBeanDefinitions(beanFactory);
+			loadBeanDefinitions(beanFactory);//设置各种beanProcessor，environment，
 			synchronized (this.beanFactoryMonitor) {
 				this.beanFactory = beanFactory;
 			}
 		}
 		catch (IOException ex) {
 			throw new ApplicationContextException("I/O error parsing bean definition source for " + getDisplayName(), ex);
+		}
+	}
+```
+```loadBeanDefinitions()```是一个模板方法，具体由子类实现，我们以最常用的```AnnotationConfigWebApplicationContext```为例：
+```
+	protected void loadBeanDefinitions(DefaultListableBeanFactory beanFactory) {
+		AnnotatedBeanDefinitionReader reader = getAnnotatedBeanDefinitionReader(beanFactory);
+		ClassPathBeanDefinitionScanner scanner = getClassPathBeanDefinitionScanner(beanFactory);
+
+		BeanNameGenerator beanNameGenerator = getBeanNameGenerator();
+		if (beanNameGenerator != null) {
+			reader.setBeanNameGenerator(beanNameGenerator);
+			scanner.setBeanNameGenerator(beanNameGenerator);
+			beanFactory.registerSingleton(AnnotationConfigUtils.CONFIGURATION_BEAN_NAME_GENERATOR, beanNameGenerator);
+		}
+
+		ScopeMetadataResolver scopeMetadataResolver = getScopeMetadataResolver();
+		if (scopeMetadataResolver != null) {
+			reader.setScopeMetadataResolver(scopeMetadataResolver);
+			scanner.setScopeMetadataResolver(scopeMetadataResolver);
+		}
+
+		if (!this.componentClasses.isEmpty()) {
+			if (logger.isDebugEnabled()) {
+				logger.debug("Registering component classes: [" +
+						StringUtils.collectionToCommaDelimitedString(this.componentClasses) + "]");
+			}
+			reader.register(ClassUtils.toClassArray(this.componentClasses));
+		}
+
+		if (!this.basePackages.isEmpty()) {
+			if (logger.isDebugEnabled()) {
+				logger.debug("Scanning base packages: [" +
+						StringUtils.collectionToCommaDelimitedString(this.basePackages) + "]");
+			}
+			scanner.scan(StringUtils.toStringArray(this.basePackages));
+		}
+
+		String[] configLocations = getConfigLocations();
+		if (configLocations != null) {
+			for (String configLocation : configLocations) {
+				try {
+					Class<?> clazz = ClassUtils.forName(configLocation, getClassLoader());
+					if (logger.isTraceEnabled()) {
+						logger.trace("Registering [" + configLocation + "]");
+					}
+					reader.register(clazz);
+				}
+				catch (ClassNotFoundException ex) {
+					if (logger.isTraceEnabled()) {
+						logger.trace("Could not load class for config location [" + configLocation +
+								"] - trying package scan. " + ex);
+					}
+					int count = scanner.scan(configLocation);
+					if (count == 0 && logger.isDebugEnabled()) {
+						logger.debug("No component classes found for specified class/package [" + configLocation + "]");
+					}
+				}
+			}
 		}
 	}
 ```
