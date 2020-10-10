@@ -260,7 +260,7 @@ factoryBean刷新方法如下：
 ```loadBeanDefinitions()```是一个模板方法，具体由子类实现，我们以最常用的```AnnotationConfigWebApplicationContext```为例：
 ```
 	protected void loadBeanDefinitions(DefaultListableBeanFactory beanFactory) {
-		//注册各种beanProcessor
+		//注册各种beanProcessor，如@Value，@Autowired，@Resource，@Bean，@Configuration，@EventListener
 		AnnotatedBeanDefinitionReader reader = getAnnotatedBeanDefinitionReader(beanFactory);
 		ClassPathBeanDefinitionScanner scanner = getClassPathBeanDefinitionScanner(beanFactory);
 
