@@ -262,6 +262,7 @@ factoryBean刷新方法如下：
 	protected void loadBeanDefinitions(DefaultListableBeanFactory beanFactory) {
 		//注册各种beanProcessor，如@Value，@Autowired，@Resource，@Bean，@Configuration，@EventListener
 		AnnotatedBeanDefinitionReader reader = getAnnotatedBeanDefinitionReader(beanFactory);
+		//扫描Component，Controller，Indexed，Repository，Service
 		ClassPathBeanDefinitionScanner scanner = getClassPathBeanDefinitionScanner(beanFactory);
 
 		BeanNameGenerator beanNameGenerator = getBeanNameGenerator();
@@ -314,6 +315,54 @@ factoryBean刷新方法如下：
 					}
 				}
 			}
+		}
+	}
+```
+##### postProcessBeanFactory
+```postProcessBeanFactory()```主要是填充```beanFactory```:  
+```
+	protected void prepareBeanFactory(ConfigurableListableBeanFactory beanFactory) {
+		// 设置类加载器，el解析器，属性注册解析器
+		beanFactory.setBeanClassLoader(getClassLoader());
+		beanFactory.setBeanExpressionResolver(new StandardBeanExpressionResolver(beanFactory.getBeanClassLoader()));
+		beanFactory.addPropertyEditorRegistrar(new ResourceEditorRegistrar(this, getEnvironment()));
+
+		// 将当前contex设置到beanProcessor.
+		beanFactory.addBeanPostProcessor(new ApplicationContextAwareProcessor(this));
+		//设置需要忽略的自动装配依赖接口
+		beanFactory.ignoreDependencyInterface(EnvironmentAware.class);
+		beanFactory.ignoreDependencyInterface(EmbeddedValueResolverAware.class);
+		beanFactory.ignoreDependencyInterface(ResourceLoaderAware.class);
+		beanFactory.ignoreDependencyInterface(ApplicationEventPublisherAware.class);
+		beanFactory.ignoreDependencyInterface(MessageSourceAware.class);
+		beanFactory.ignoreDependencyInterface(ApplicationContextAware.class);
+
+		// BeanFactory interface not registered as resolvable type in a plain factory.
+		// MessageSource registered (and found for autowiring) as a bean.
+		beanFactory.registerResolvableDependency(BeanFactory.class, beanFactory);
+		beanFactory.registerResolvableDependency(ResourceLoader.class, this);
+		beanFactory.registerResolvableDependency(ApplicationEventPublisher.class, this);
+		beanFactory.registerResolvableDependency(ApplicationContext.class, this);
+
+		// Register early post-processor for detecting inner beans as ApplicationListeners.
+		beanFactory.addBeanPostProcessor(new ApplicationListenerDetector(this));
+
+		// Detect a LoadTimeWeaver and prepare for weaving, if found.
+		if (beanFactory.containsBean(LOAD_TIME_WEAVER_BEAN_NAME)) {
+			beanFactory.addBeanPostProcessor(new LoadTimeWeaverAwareProcessor(beanFactory));
+			// Set a temporary ClassLoader for type matching.
+			beanFactory.setTempClassLoader(new ContextTypeMatchClassLoader(beanFactory.getBeanClassLoader()));
+		}
+
+		// Register default environment beans.
+		if (!beanFactory.containsLocalBean(ENVIRONMENT_BEAN_NAME)) {
+			beanFactory.registerSingleton(ENVIRONMENT_BEAN_NAME, getEnvironment());
+		}
+		if (!beanFactory.containsLocalBean(SYSTEM_PROPERTIES_BEAN_NAME)) {
+			beanFactory.registerSingleton(SYSTEM_PROPERTIES_BEAN_NAME, getEnvironment().getSystemProperties());
+		}
+		if (!beanFactory.containsLocalBean(SYSTEM_ENVIRONMENT_BEAN_NAME)) {
+			beanFactory.registerSingleton(SYSTEM_ENVIRONMENT_BEAN_NAME, getEnvironment().getSystemEnvironment());
 		}
 	}
 ```

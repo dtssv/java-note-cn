@@ -164,7 +164,7 @@ XxxService xxxService = reference.get(); // 注意：此代理对象内部封装
         ApplicationModel.initConsumerModel(getUniqueServiceName(), consumerModel);
     }
 ```
-上边的大段逻辑我们可以认为是为了生存代理类的前置条件，通过各种判断之后生成代理类，代理类生成逻辑如下：  
+上边的大段逻辑我们可以认为是为了生成代理类的前置条件，通过各种判断之后生成代理类，代理类生成逻辑如下：  
 ```
     @SuppressWarnings({"unchecked", "rawtypes", "deprecation"})
     private T createProxy(Map<String, String> map) {
