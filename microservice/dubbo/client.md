@@ -384,7 +384,7 @@ XxxService xxxService = reference.get(); // 注意：此代理对象内部封装
         return getExchanger(url).connect(url, handler);//相似的流程，接下来不做太多分析
     }
 ```
-```DubboProtocol```实现了和server端服务的连接，```RegistryProtocol```剩余部分则是服务的获取和服务变更的监听，这一部分会在服务字典相关分析，服务获取完毕会判断注册中心数量，如果是多个注册中心则封装成集群invoke，然后生成invoke代理，代理类生成逻辑：  
+```DubboProtocol```实现了和server端服务的连接，``````剩余部分则是服务的获取和服务变更的监听，这一部分会在服务字典相关分析，服务获取完毕会判断注册中心数量，如果是多个注册中心则封装成集群invoke，然后生成invoke代理，代理类生成逻辑：  
 ```
     @Override
     public <T> T getProxy(Invoker<T> invoker) throws RpcException {
