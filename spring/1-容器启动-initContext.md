@@ -137,7 +137,7 @@ public class ContextLoaderListener extends ContextLoader implements ServletConte
 			prepareBeanFactory(beanFactory);
 
 			try {
-				// 允许在上下文子类中对bean工厂进行后处理.
+				// 后置处理beanFactory.
 				postProcessBeanFactory(beanFactory);
 
 				// 激活各种beanFactory的处理器.
