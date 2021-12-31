@@ -126,65 +126,66 @@ public class ContextLoaderListener extends ContextLoader implements ServletConte
 而```wac.refresh()```这个方法就是上下文刷新的所有的实现所在：  
 ```
 	public void refresh() throws BeansException, IllegalStateException {
-		synchronized (this.startupShutdownMonitor) {
-			// 上下文刷新前准备.
-			prepareRefresh();
+		StartupStep contextRefresh = this.applicationStartup.start("spring.context.refresh");
+		// 上下文刷新前准备.
+		prepareRefresh();
 
-			// 初始化beanFactory.
-			ConfigurableListableBeanFactory beanFactory = obtainFreshBeanFactory();
+		// 初始化beanFactory.
+		ConfigurableListableBeanFactory beanFactory = obtainFreshBeanFactory();
 
-			// 填充beanFactory.
-			prepareBeanFactory(beanFactory);
+		// 填充beanFactory.
+		prepareBeanFactory(beanFactory);
 
-			try {
-				// 后置处理beanFactory.
-				postProcessBeanFactory(beanFactory);
+		try {
+			// 后置处理beanFactory.
+			postProcessBeanFactory(beanFactory);
 
-				// 执行各种beanFactory的处理器.
-				invokeBeanFactoryPostProcessors(beanFactory);
+			StartupStep beanPostProcess = this.applicationStartup.start("spring.context.beans.post-process");
+			// 执行各种beanFactory的处理器.
+			invokeBeanFactoryPostProcessors(beanFactory);
 
-				// 注册拦截bean创建的bean处理器.
-				registerBeanPostProcessors(beanFactory);
+			// 注册拦截bean创建的bean处理器.
+			registerBeanPostProcessors(beanFactory);
+			beanPostProcess.end();
+			// 为上下文初始化message,即不同语言的消息体，国际化处理.
+			initMessageSource();
 
-				// 为上下文初始化message,即不同语言的消息体，国际化处理.
-				initMessageSource();
+			// 初始化此上下文的事件广播处理器.
+			initApplicationEventMulticaster();
 
-				// 初始化此上下文的事件广播器.
-				initApplicationEventMulticaster();
+			// 子类初始化其他特殊bean.
+			onRefresh();
 
-				// 子类初始化其他特殊bean.
-				onRefresh();
+			// 注册监听器.
+			registerListeners();
 
-				// 注册监听器.
-				registerListeners();
+			// 初始化所有其他单例bean.
+			finishBeanFactoryInitialization(beanFactory);
 
-				// 初始化所有其他单例bean.
-				finishBeanFactoryInitialization(beanFactory);
+			// 初始化完成，发布事件.
+			finishRefresh();
+		}
 
-				// 初始化完成，发布事件.
-				finishRefresh();
+		catch (BeansException ex) {
+			if (logger.isWarnEnabled()) {
+				logger.warn("Exception encountered during context initialization - " +
+						"cancelling refresh attempt: " + ex);
 			}
 
-			catch (BeansException ex) {
-				if (logger.isWarnEnabled()) {
-					logger.warn("Exception encountered during context initialization - " +
-							"cancelling refresh attempt: " + ex);
-				}
+			// 异常则销毁所有bean.
+			destroyBeans();
 
-				// 异常则销毁所有bean.
-				destroyBeans();
+			// 重置 'active' 状态.
+			cancelRefresh(ex);
 
-				// 重置 'active' 状态.
-				cancelRefresh(ex);
+			// Propagate exception to caller.
+			throw ex;
+		}
 
-				// Propagate exception to caller.
-				throw ex;
-			}
-
-			finally {
-				// 重置缓存，因为不需要再次初始化了
-				resetCommonCaches();
-			}
+		finally {
+			// 重置缓存，因为不需要再次初始化了
+			resetCommonCaches();
+			contextRefresh.end();
 		}
 	}
 ```
