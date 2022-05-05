@@ -1,7 +1,7 @@
 ### 介绍
 ```synchronized```是java原生锁实现，只需要在需要加锁的方法或者代码块增加```synchronized```关键字，即可加锁完成，当并发情况下，只有获取锁的线程可以执行代码，其他线程需要等待锁被释放后获取锁才能执行相关代码。```synchronized```是可重入锁，同时它的实现是非公平锁。```synchronized```修饰的对象根据状态分为无锁、偏向锁、轻量级锁和重量级锁四种状态，锁的状态存储在对象头的markword，下面是两张图分别展示在32位虚拟机和64位虚拟机下对象不同状态的markword内容。
 #### 32位
-![32位](../../static/img/32位.png "32位")
+![32位](https://github.com/dtssv/java-note-cn/blob/8e4e6ee3e17b7f06968e7ed69c4ba25fd719ec1b/static/img/32位.png "32位")
 #### 64位
 ![64位](../../static/img/64位.png "64位")
 ### MarkWord分析
