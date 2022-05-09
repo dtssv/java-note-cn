@@ -18,9 +18,9 @@ public class ReentrantReadWriteLockTest {
     }
 
     public static void test(){
+        LOCK.writeLock().lock();
         try {
             System.out.println(Thread.currentThread().getName() + "进入");
-            LOCK.writeLock().lock();
             System.out.println(Thread.currentThread().getName() + "获取锁");
             Thread.sleep(5000l);
         } catch (InterruptedException e) {
@@ -31,9 +31,9 @@ public class ReentrantReadWriteLockTest {
         }
     }
     public static void test1(){
+        LOCK.readLock().lock();
         try {
             System.out.println(Thread.currentThread().getName() + "进入");
-            LOCK.readLock().lock();
             System.out.println(Thread.currentThread().getName() + "获取锁");
             Thread.sleep(5000l);
         } catch (InterruptedException e) {

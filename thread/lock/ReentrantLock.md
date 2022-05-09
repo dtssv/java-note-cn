@@ -10,8 +10,8 @@ public class ReentrantLockTest {
         new Thread(()->test(),"Second").start();
     }
     public static void test(){
+        LOCK.lock();
         try {
-            LOCK.lock();
             System.out.println(Thread.currentThread().getName() + "获取锁");
             Thread.sleep(5000l);
         } catch (InterruptedException e) {
